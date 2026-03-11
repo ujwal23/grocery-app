@@ -2,7 +2,7 @@ from datetime import datetime
 
 
 class GroceryItem:
-    def __init__(self, name, quantity, price, category="General", bought=False):
+    def __init__(self, name, quantity, price, category="General", bought=False, sku=None):
 
         # --- Validation ---
         if not name.strip():
@@ -18,6 +18,7 @@ class GroceryItem:
         self.price = price
         self.category = category.strip() or "General"
         self.bought = bought
+        self.sku = sku
         self.created_at = datetime.now().isoformat()
 
     # -------- Instance Methods --------
@@ -42,6 +43,10 @@ class GroceryItem:
         """Flips bought status between True and False."""
         self.bought = not self.bought
 
+    def mark_as_bought(self):
+        """Marks the item as bought.-Used in main.py after successful checkout. Ensures item is marked bought regardless of previous state."""
+        self.bought = True
+
     def is_bought(self):
         return self.bought
 
@@ -55,6 +60,7 @@ class GroceryItem:
             "price": self.price,
             "category": self.category,
             "bought": self.bought,
+            "sku": self.sku,
             "created_at": self.created_at
         }
 
@@ -66,7 +72,8 @@ class GroceryItem:
             quantity=data["quantity"],
             price=data["price"],
             category=data.get("category", "General"),
-            bought=data.get("bought", False)
+            bought=data.get("bought", False),
+            sku=data.get("sku")
         )
         item.created_at = data.get("created_at", datetime.now().isoformat())
         return item

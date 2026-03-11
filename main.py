@@ -22,6 +22,24 @@ from util import (
     print_sort_menu,
     print_export_menu
 )
+from inventory_client import (
+    is_api_available,
+    search_products,
+    check_stock,
+    deduct_stock
+)
+
+
+# -------------------------
+# STARTUP
+# -------------------------
+
+def check_api_on_startup():
+    if is_api_available():
+        print("✅ Inventory API connected.")
+    else:
+        print("⚠️  Inventory API not available. Running in offline mode.")
+        print("   You can still manage your cart, but stock checking is disabled.")
 
 
 # -------------------------
@@ -29,40 +47,77 @@ from util import (
 # -------------------------
 
 def add_item(grocery_list):
-    name = input("Enter item name: ").strip()
-    if not name:
-        print("Name cannot be empty.")
+    """Search Inventory API and add product to cart."""
+
+    if not is_api_available():
+        print("Inventory API is not available. Cannot browse products.")
         return
 
-    # Check for duplicate
-    existing_item = find_item_by_name(grocery_list, name)
-    if existing_item:
-        print(f"{name} already exists.")
-        qty = get_valid_int("Enter quantity to add: ")
+    keyword = input("Search product: ").strip().lower()
+    if not keyword:
+        print("Search keyword cannot be empty.")
+        return
+
+    results = search_products(keyword)
+
+    if not results:
+        print("No products found matching your search.")
+        return
+
+    # Show results to customer
+    print("\nSearch Results:")
+    for i, product in enumerate(results, start=1):
+        print(f"{i}. {product['name']} — {CURRENCY}{product['price_per_unit']} (Stock: {product['stock']})")
+
+    index = get_valid_int("Enter number to add to cart (0 to cancel): ") - 1
+
+    if index == -1:
+        print("Cancelled.")
+        return
+
+    if not (0 <= index < len(results)):
+        print("Invalid selection.")
+        return
+
+    selected = results[index]
+
+    # Check if already in cart
+    existing = find_item_by_name(grocery_list, selected["name"])
+    if existing:
+        qty = get_valid_int("Already in cart. Enter quantity to add: ")
         try:
-            existing_item.increase_quantity(qty)     # model handles validation
-            print(f"Updated quantity to {existing_item.quantity}")
+            existing.increase_quantity(qty)
+            print(f"Updated quantity to {existing.quantity}")
         except ValueError as e:
             print("Error:", e)
         return
 
-    # New item — collect details
     quantity = get_valid_int("Enter quantity: ")
-    price = get_valid_float("Enter price per unit: ")
-    category = input("Enter category: ").strip() or "General"
+    if quantity <= 0:
+        print("Quantity must be positive.")
+        return
 
-    # Let the model validate — catch any errors it raises
+    # Check stock availability
+    if not check_stock(selected["sku"], quantity):
+        print(f"Not enough stock. Available: {selected['stock']}")
+        return
+
     try:
-        item = GroceryItem(name, quantity, price, category)
+        item = GroceryItem(
+            name=selected["name"],
+            quantity=quantity,
+            price=selected["price_per_unit"],
+            sku=selected["sku"]
+        )
         grocery_list.append(item)
-        print(f"{name} added successfully.")
+        print(f"{selected['name']} added to cart.")
     except ValueError as e:
         print("Error:", e)
 
 
 def delete_item(grocery_list):
     if not grocery_list:
-        print("Grocery list is empty.")
+        print("Cart is empty.")
         return
 
     print_delete_list(grocery_list)
@@ -70,29 +125,14 @@ def delete_item(grocery_list):
 
     if 0 <= index < len(grocery_list):
         removed = grocery_list.pop(index)
-        print(f"{removed.name} deleted successfully.")     # dot notation
-    else:
-        print("Invalid item number.")
-
-
-def toggle_item(grocery_list):
-    if not grocery_list:
-        print("Grocery list is empty.")
-        return
-
-    print_toggle_list(grocery_list)
-    index = get_valid_int("Enter item number to toggle: ") - 1
-
-    if 0 <= index < len(grocery_list):
-        grocery_list[index].toggle_bought()               # model method
-        print("Status updated successfully.")
+        print(f"{removed.name} removed from cart.")
     else:
         print("Invalid item number.")
 
 
 def decrease_quantity(grocery_list):
     if not grocery_list:
-        print("Grocery list is empty.")
+        print("Cart is empty.")
         return
 
     print_toggle_list(grocery_list)
@@ -103,25 +143,92 @@ def decrease_quantity(grocery_list):
 
     if result == "updated":
         print("Quantity updated successfully.")
-
     elif result == "delete":
-        confirm = input("Quantity becomes 0. Delete item? (y/n): ").lower()
+        confirm = input("Quantity becomes 0. Remove from cart? (y/n): ").lower()
         if confirm == "y":
             grocery_list.pop(index)
-            print("Item deleted.")
+            print("Item removed.")
         else:
             print("No changes made.")
-
     elif result == "invalid":
         print("Quantity must be positive and less than current.")
-
     else:
         print("Invalid item number.")
 
 
+def view_items(grocery_list):
+    if not grocery_list:
+        print("Cart is empty.")
+        return
+
+    print("\n--- Your Cart ---")
+    for i, item in enumerate(grocery_list, start=1):
+        print_item(i, item, item.get_total_value())
+
+    total = calculate_cart_total(grocery_list)
+    print(f"\nCart Total: {CURRENCY}{total:.2f}\n")
+
+
+def checkout(grocery_list):
+    """Check stock for all items and deduct on confirmation."""
+    pending = [item for item in grocery_list if not item.is_bought()]
+
+    if not pending:
+        print("No pending items in cart.")
+        return
+
+    if not is_api_available():
+        print("Inventory API is not available. Cannot checkout.")
+        return
+
+    print("\n--- Checkout ---")
+    print("Checking stock availability...\n")
+
+    # Check stock for all items first
+    out_of_stock = []
+    for item in pending:
+        if not item.sku:
+            print(f"⚠️  {item.name} — not linked to inventory, skipping stock check.")
+            continue
+        if not check_stock(item.sku, item.quantity):
+            out_of_stock.append(item.name)
+
+    if out_of_stock:
+        print("❌ The following items don't have enough stock:")
+        for name in out_of_stock:
+            print(f"   - {name}")
+        print("\nPlease adjust quantities and try again.")
+        return
+
+    # Show cart summary
+    print("All items in stock ✅\n")
+    for item in pending:
+        print_item(pending.index(item) + 1, item, item.get_total_value())
+
+    total = sum(item.get_total_value() for item in pending)
+    print(f"\nTotal: {CURRENCY}{total:.2f}")
+
+    confirm = input("\nConfirm purchase? (y/n): ").strip().lower()
+    if confirm != "y":
+        print("Checkout cancelled.")
+        return
+
+    # Deduct stock and mark as bought
+    for item in pending:
+        if item.sku:
+            result = deduct_stock(item.sku, item.quantity)
+            if "error" in result:
+                print(f"⚠️  Could not deduct stock for {item.name}: {result['error']}")
+                continue
+        item.mark_as_bought()
+
+    print(f"\n✅ Purchase confirmed! Total: {CURRENCY}{total:.2f}")
+    print("Thank you for shopping!")
+
+
 def edit_item(grocery_list):
     if not grocery_list:
-        print("Grocery list is empty.")
+        print("Cart is empty.")
         return
 
     print_delete_list(grocery_list)
@@ -135,68 +242,46 @@ def edit_item(grocery_list):
     print(f"\nEditing: {item.name}")
     print("Press Enter to keep current value.\n")
 
-    # Each field is optional — only update if user enters something
-    new_name = input(f"Name [{item.name}]: ").strip()
-    if new_name:
-        item.name = new_name
-
     new_category = input(f"Category [{item.category}]: ").strip()
     if new_category:
         item.category = new_category
 
-    new_price = input(f"Price [{item.price}]: ").strip()
-    if new_price:
+    new_qty = input(f"Quantity [{item.quantity}]: ").strip()
+    if new_qty:
         try:
-            new_price = float(new_price)
-            if new_price < 0:
-                print("Price cannot be negative. Keeping current value.")
+            new_qty = int(new_qty)
+            if new_qty <= 0:
+                print("Quantity must be positive. Keeping current value.")
             else:
-                item.price = new_price
+                item.quantity = new_qty
         except ValueError:
-            print("Invalid price. Keeping current value.")
+            print("Invalid quantity. Keeping current value.")
 
     print(f"{item.name} updated successfully.")
 
 
-def view_items(grocery_list):
-    if not grocery_list:
-        print("Grocery list is empty.")
-        return
-
-    print("\n--- Grocery List ---")
-    for i, item in enumerate(grocery_list, start=1):
-        print_item(i, item, item.get_total_value())       # model method
-
-    total = calculate_cart_total(grocery_list)
-    print(f"\nTotal (bought items only): {CURRENCY}{total:.2f}\n")   # CURRENCY constant
-
-
 def show_filtered(grocery_list, status):
     filtered = filter_items(grocery_list, status)
-
     if not filtered:
         print("No items found.")
         return
-
     for i, item in enumerate(filtered, start=1):
         print_item(i, item, item.get_total_value())
 
 
 def show_category_summary(grocery_list):
     summary = category_summary(grocery_list)
-
     if not summary:
         print("No items available.")
         return
-
     print("\nCategory-wise Spending:")
     for category, total in summary.items():
-        print(f"{category}: {CURRENCY}{total:.2f}")       # CURRENCY constant
+        print(f"{category}: {CURRENCY}{total:.2f}")
 
 
 def search_menu(grocery_list):
     if not grocery_list:
-        print("Grocery list is empty.")
+        print("Cart is empty.")
         return
 
     print_search_menu()
@@ -223,7 +308,7 @@ def search_menu(grocery_list):
 
 def sort_menu(grocery_list):
     if not grocery_list:
-        print("Grocery list is empty.")
+        print("Cart is empty.")
         return
 
     print_sort_menu()
@@ -242,7 +327,6 @@ def sort_menu(grocery_list):
         return
 
     sorted_list = sort_items(grocery_list, sort_mapping[choice])
-
     print("\nSorted Results:")
     for i, item in enumerate(sorted_list, start=1):
         print_item(i, item, item.get_total_value())
@@ -250,17 +334,13 @@ def sort_menu(grocery_list):
 
 def export_menu(grocery_list):
     if not grocery_list:
-        print("Grocery list is empty.")
+        print("Cart is empty.")
         return
 
     print_export_menu()
     choice = input("Choose option: ").strip()
 
-    mapping = {
-        "1": "all",
-        "2": "bought",
-        "3": "pending"
-    }
+    mapping = {"1": "all", "2": "bought", "3": "pending"}
 
     if choice not in mapping:
         print("Invalid choice.")
@@ -275,7 +355,7 @@ def export_menu(grocery_list):
 
     try:
         export_to_csv(grocery_list, filename, mapping[choice])
-        print(f"Data exported successfully to {filename}")
+        print(f"Exported successfully to {filename}")
     except ValueError as e:
         print("Error:", e)
 
@@ -286,6 +366,9 @@ def export_menu(grocery_list):
 
 def main():
     grocery_list = load_data()
+
+    # Check API on startup
+    check_api_on_startup()
 
     while True:
         print_menu()
@@ -303,7 +386,7 @@ def main():
             view_items(grocery_list)
 
         elif choice == "4":
-            toggle_item(grocery_list)
+            checkout(grocery_list)
             save_data(grocery_list)
 
         elif choice == "5":

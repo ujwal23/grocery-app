@@ -4,11 +4,11 @@ from storage import CURRENCY
 def print_menu():
     print("\n---- Grocery App ----")
     print(" 1. Add item")
-    print(" 2. Delete item")
-    print(" 3. View items")
-    print(" 4. Toggle bought status")
+    print(" 2. Remove item")
+    print(" 3. View cart")
+    print(" 4. Checkout")
     print(" 5. Decrease quantity")
-    print(" 6. Show bought items")
+    print(" 6. Show purchased items")
     print(" 7. Show pending items")
     print(" 8. Show category summary")
     print(" 9. Search items")
@@ -21,17 +21,17 @@ def print_menu():
 def print_item(index, item, item_total):
     status = "Bought" if item.is_bought() else "Pending"
     print(f"{index}. {item.name} ({item.quantity}) - {item.category}")
-    print(f"   Price: {CURRENCY}{item.price} each | Item Total: {CURRENCY}{item_total:.2f} | Status: {status}")
+    print(f"   Price: {CURRENCY}{item.price} each | Total: {CURRENCY}{item_total:.2f} | Status: {status}")
 
 
 def print_delete_list(grocery_list):
-    print("\n--- Items ---")
+    print("\n--- Cart ---")
     for i, item in enumerate(grocery_list, start=1):
         print(f"{i}. {item.name}")
 
 
 def print_toggle_list(grocery_list):
-    print("\n--- Grocery List ---")
+    print("\n--- Cart ---")
     for i, item in enumerate(grocery_list, start=1):
         status = "Bought" if item.is_bought() else "Pending"
         print(f"{i}. {item.name} [{status}]")
